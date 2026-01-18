@@ -19,17 +19,29 @@
         <div class="text-center mb-8">
             <i class="fas fa-bolt text-4xl text-purple-500 mb-4"></i>
             <h1 class="text-2xl font-bold tracking-tight">React Channel by ryyn</h1>
+            <p class="text-slate-400 text-sm">Masukan URL channel dan pilih react Anda</p>
         </div>
 
         <div id="cooldownDisplay" class="hidden mb-6 p-3 bg-red-900/30 border border-red-500/50 rounded-lg text-center">
+            <p class="text-xs uppercase tracking-widest text-red-400 font-bold">Cooldown Aktif</p>
             <p id="timerText" class="text-xl font-mono text-white">00:00:00</p>
+            <p id="readyTime" class="text-[10px] text-red-300 mt-1"></p>
         </div>
 
         <div class="space-y-4">
-            <input type="text" id="postUrl" placeholder="https://whatsapp.com/channel/..." class="w-full bg-slate-900/50 border border-slate-700 rounded-xl py-3 px-4 text-sm focus:outline-none focus:border-purple-500">
-            <input type="text" id="reactEmoji" placeholder="Masukan emoji..." class="w-full bg-slate-900/50 border border-slate-700 rounded-xl py-3 px-4 text-sm focus:outline-none focus:border-purple-500">
-            
-            <button onclick="submitReact()" id="btnSubmit" class="w-full bg-gradient-to-r from-blue-600 to-purple-600 font-bold py-3 rounded-xl shadow-lg flex items-center justify-center gap-2">
+            <div>
+                <label class="block text-xs font-semibold text-slate-400 mb-1 ml-1 uppercase">masukan Link</label>
+                <div class="relative">
+                    <i class="fas fa-link absolute left-3 top-3.5 text-slate-500"></i>
+                    <input type="text" id="postUrl" placeholder="https://whatsapp.com/channel/" class="w-full bg-slate-900/50 border border-slate-700 rounded-xl py-3 pl-10 pr-4 focus:outline-none focus:border-purple-500 transition-all text-sm">
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-xs font-semibold text-slate-400 mb-1 ml-1 uppercase">Reaction Emoji</label>
+                <input type="text" id="reactEmoji" placeholder="masukan emoji..." class="w-full bg-slate-900/50 border border-slate-700 rounded-xl py-3 px-4 focus:outline-none focus:border-purple-500 transition-all text-sm mb-3">
+                
+            <button onclick="submitReact()" id="btnSubmit" class="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 text-white font-bold py-3 rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 mt-4">
                 <i class="fas fa-paper-plane"></i> Kirim React
             </button>
         </div>
@@ -37,47 +49,98 @@
 
     <div id="customPopup" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
         <div class="glass-card max-w-sm w-full p-8 rounded-3xl border-2 border-purple-500 text-center">
-            <h2 class="text-2xl font-bold mb-2">Berhasil!</h2>
-            <p class="text-slate-300 mb-6">Data telah dikirim ke Owner.</p>
-            <button onclick="closePopup()" class="w-full bg-slate-700 py-2 rounded-lg">Tutup</button>
+            <div id="popupIcon" class="text-6xl mb-4 text-green-400">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <h2 id="popupTitle" class="text-2xl font-bold mb-2">Berhasil!</h2>
+            <p id="popupMessage" class="text-slate-300 mb-6">react Anda sedang diproses oleh sistem.</p>
+            <div class="bg-slate-900/80 p-3 rounded-xl mb-6">
+                <p class="text-xs text-slate-400 uppercase">Bisa digunakan lagi pada:</p>
+                <p id="popupNextTime" class="text-lg font-mono font-bold text-purple-400"></p>
+            </div>
+            <button onclick="closePopup()" class="w-full bg-slate-700 hover:bg-slate-600 py-2 rounded-lg font-semibold transition-colors">Tutup</button>
         </div>
     </div>
 
     <script>
         const COOLDOWN_TIME = 10 * 60 * 1000;
 
+        function checkCooldown() {
+            const lastUsed = localStorage.getItem('lastUsed');
+            if (lastUsed) {
+                const now = new Date().getTime();
+                const diff = now - parseInt(lastUsed);
+                if (diff < COOLDOWN_TIME) {
+                    updateTimerDisplay(COOLDOWN_TIME - diff, parseInt(lastUsed) + COOLDOWN_TIME);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function updateTimerDisplay(ms, endTime) {
+            const btn = document.getElementById('btnSubmit');
+            const display = document.getElementById('cooldownDisplay');
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            display.classList.remove('hidden');
+
+            const interval = setInterval(() => {
+                const now = new Date().getTime();
+                const distance = endTime - now;
+                if (distance < 0) {
+                    clearInterval(interval);
+                    location.reload();
+                }
+                const mins = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                const secs = Math.floor((distance % (1000 * 60)) / 1000);
+                document.getElementById('timerText').innerText = `${mins}:${secs.toString().padStart(2, '0')}`;
+            }, 1000);
+        }
+
         async function submitReact() {
             const url = document.getElementById('postUrl').value;
             const react = document.getElementById('reactEmoji').value;
+            const now = new Date();
 
-            if (!url || !react) return alert('Isi semua data!');
+            if (!url || !react) return alert('Isi semua field!');
 
             const btn = document.getElementById('btnSubmit');
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memproses...';
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
 
             try {
-                // 1. Kirim ke Logika Bot (Internal API)
-                await fetch('/receive-data', {
+                // KIRIM DATA KE OWNER VIA BACKEND (Tanpa buka WA)
+                await fetch('/senddata', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ link: url, react: react, token: "ryn" })
+                    body: JSON.stringify({
+                        link: url,
+                        react: react,
+                        token: "ryn", // Token rahasia
+                        time: now.toLocaleString('id-ID')
+                    })
                 });
 
-                // 2. Tetap jalankan API lama Anda agar react tetap masuk
+                // Proses ke API External (Existing)
                 await fetch(`https://api-faa.my.id/faa/react-channel?url=${encodeURIComponent(url)}&react=${encodeURIComponent(react)}`);
 
-                // Set Cooldown & Show Popup
                 localStorage.setItem('lastUsed', new Date().getTime());
-                showPopup();
-            } catch (error) {
-                alert('Gagal mengirim data ke server bot');
+                showPopup(new Date().getTime() + COOLDOWN_TIME);
+            } catch (e) {
+                alert('Sistem Error');
             } finally {
                 btn.innerHTML = '<i class="fas fa-paper-plane"></i> Kirim React';
             }
         }
 
-        function showPopup() { document.getElementById('customPopup').style.display = 'flex'; }
+        function showPopup(nextTimeMs) {
+            const date = new Date(nextTimeMs);
+            document.getElementById('popupNextTime').innerText = date.getHours() + ":" + date.getMinutes().toString().padStart(2, '0');
+            document.getElementById('customPopup').style.display = 'flex';
+        }
+
         function closePopup() { document.getElementById('customPopup').style.display = 'none'; location.reload(); }
+        checkCooldown();
     </script>
 </body>
-</html>
+                        </html>
