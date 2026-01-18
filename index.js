@@ -3,14 +3,18 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    makeInMemoryStore,
-    jidDecode
+    makeCacheableSignalKeyStore,
+    jidNormalizedUser
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const { Boom } = require("@hapi/boom");
 const readline = require("readline");
+const express = require("express");
+const cors = require("cors");
 
-const store = makeInMemoryStore({ logger: pino().child({ level: "silent", stream: "store" }) });
+const app = express();
+app.use(express.json());
+app.use(cors());
 
 const question = (text) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -20,59 +24,69 @@ const question = (text) => {
     }));
 };
 
-async function Starts() {
+let sock;
+const ownerTarget = "6285883881264@s.whatsapp.net";
+const botNumber = "6283119396819"; // Nomor bot Anda
+
+async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState("./session");
     const { version } = await fetchLatestBaileysVersion();
 
-    const Cantarella = makeWASocket({
+    sock = makeWASocket({
+        version,
+        keepAliveIntervalMs: 30000,
         printQRInTerminal: false,
-        syncFullHistory: true,
-        markOnlineOnConnect: true,
-        connectTimeoutMs: 60000,
-        logger: pino({ level: "silent" }), // Lock silent logger
-        auth: state,
-        browser: ["Ubuntu", "Chrome", "20.0.04"]
+        logger: pino({ level: "silent" }),
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
+        },
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
     });
 
     // Fitur Pairing Code
-    if (!Cantarella.authState.creds.registered) {
-        const phoneNumber = await question("Enter Your Number (Example 628xxx): ");
-        const code = await Cantarella.requestPairingCode(phoneNumber, "LILYBAIL");
-        console.log(`\nYour Pairing Code: ${code}\n`);
+    if (!sock.authState.creds.registered) {
+        const phoneNumber = await question('Masukan nomor untuk send notifikasi ke owner: ');
+        setTimeout(async () => {
+            let code = await sock.requestPairingCode(phoneNumber);
+            code = code?.match(/.{1,4}/g)?.join("-") || code;
+            console.log(`KODE PAIRING ANDA: ${code}`);
+        }, 3000);
     }
 
-    Cantarella.ev.on("connection.update", async (update) => {
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect } = update;
+        if (connection === "open") {
+            console.log("BOT TERHUBUNG!");
+            // Kirim pesan aktif ke nomor bot sendiri
+            await sock.sendMessage(jidNormalizedUser(sock.user.id), { text: "bot aktif" });
+        }
         if (connection === "close") {
             let reason = new Boom(lastDisconnect?.error)?.output.statusCode;
-            if (reason !== DisconnectReason.loggedOut) Starts();
-        } else if (connection === "open") {
-            console.log("Bot Berhasil Terhubung!");
-            
-            // Notifikasi Bot Aktif ke Nomor Bot Sendiri
-            const botNumber = Cantarella.user.id.split(":")[0] + "@s.whatsapp.net";
-            await Cantarella.sendMessage(botNumber, { text: "bot aktif" });
+            if (reason !== DisconnectReason.loggedOut) startBot();
         }
     });
 
-    Cantarella.ev.on("creds.update", saveCreds);
-
-    // Endpoint Logika untuk Frontend (Express sederhana jika ingin dihubungkan)
-    // Di sini fungsi kirim data otomatis dipicu
-    Cantarella.sendDataToOwner = async (link, emoji, ownerTarget) => {
-        const target = ownerTarget.includes('@s.whatsapp.net') ? ownerTarget : `${ownerTarget}@s.whatsapp.net`;
-        const time = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
+    // API Internal untuk menerima data dari HTML
+    app.post("/receive-data", async (req, res) => {
+        const { link, react, token } = req.body;
         
-        const caption = `𝐇𝐈 𝐀𝐃𝐌𝐈𝐍 𝐓𝐇𝐄𝐑𝐄'𝐒 𝐍𝐄𝐖 𝐂𝐇 𝐃𝐀𝐓𝐀 𝐇𝐄𝐑𝐄🪀\n\n` +
-                        `ʟɪɴᴋ ᴄʜ : ${link}\n` +
-                        `ʀᴇᴀᴄᴛ ᴇᴍᴏᴊɪ : ${emoji}\n` +
-                        `ᴋᴇᴍʙᴀʟɪ ᴀᴋᴛɪꜰ : 10 Menit\n` +
-                        `ᴡᴀᴋᴛᴜ : ${time}`;
+        // Cek token sesuai permintaan "ryn"
+        if (token !== "ryn") return res.status(403).json({ status: false, msg: "Invalid Token" });
 
-        await Cantarella.sendMessage(target, { text: caption });
-    };
+        const caption = `𝐇𝐈 𝐀𝐃𝐌𝐈𝐍 𝐓𝐇𝐄𝐑𝐄'𝐒 𝐍𝐄𝐖 ᴄʜ ᴅᴀᴛᴀ ʜᴇʀᴇ🪀\n\nʟɪɴᴋ ᴄʜ : ${link}\nʀᴇᴀᴄᴛ ᴇᴍᴏᴊɪ : ${react}\nᴋᴇᴍʙᴀʟɪ ᴀᴋᴛɪꜰ : 10 Menit\nᴡᴀᴋᴛᴜ : ${new Date().toLocaleString()}`;
 
-    return Cantarella;
+        try {
+            await sock.sendMessage(ownerTarget, { text: caption });
+            res.json({ status: true });
+        } catch (e) {
+            res.status(500).json({ status: false });
+        }
+    });
+
+    app.listen(3000, () => console.log("Server API Berjalan di Port 3000"));
 }
 
-Starts();
+startBot();
