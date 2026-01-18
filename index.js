@@ -8,85 +8,69 @@ const {
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const { Boom } = require("@hapi/boom");
-const readline = require("readline");
 const express = require("express");
-const cors = require("cors");
-
 const app = express();
+const path = require("path");
+
+const ownerNumber = "6285883881264"; // Nomor Tujuan
+const botNumber = "6283119396819"; // Nomor Bot Utama
+const tokenKey = "ryn";
+
 app.use(express.json());
-app.use(cors());
-
-const question = (text) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    return new Promise((resolve) => rl.question(text, (answer) => {
-        rl.close();
-        resolve(answer);
-    }));
-};
-
-let sock;
-const ownerTarget = "6285883881264@s.whatsapp.net";
-const botNumber = "6283119396819"; // Nomor bot Anda
+app.use(express.static("."));
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState("./session");
     const { version } = await fetchLatestBaileysVersion();
 
-    sock = makeWASocket({
+    const sock = makeWASocket({
         version,
-        keepAliveIntervalMs: 30000,
-        printQRInTerminal: false,
         logger: pino({ level: "silent" }),
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
-        },
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
+        printQRInTerminal: false,
+        auth: state,
+        browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
     // Fitur Pairing Code
     if (!sock.authState.creds.registered) {
-        const phoneNumber = await question('Masukan nomor untuk send notifikasi ke owner: ');
         setTimeout(async () => {
-            let code = await sock.requestPairingCode(phoneNumber);
-            code = code?.match(/.{1,4}/g)?.join("-") || code;
-            console.log(`KODE PAIRING ANDA: ${code}`);
+            let code = await sock.requestPairingCode(botNumber);
+            console.log(`\n╭────────────────╼\n╎ YOUR PAIRING CODE : ${code}\n╰────────────────╼\n`);
         }, 3000);
     }
 
-    sock.ev.on("creds.update", saveCreds);
-
-    sock.ev.on("connection.update", async (update) => {
+    sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect } = update;
-        if (connection === "open") {
-            console.log("BOT TERHUBUNG!");
-            // Kirim pesan aktif ke nomor bot sendiri
-            await sock.sendMessage(jidNormalizedUser(sock.user.id), { text: "bot aktif" });
-        }
         if (connection === "close") {
             let reason = new Boom(lastDisconnect?.error)?.output.statusCode;
             if (reason !== DisconnectReason.loggedOut) startBot();
+        } else if (connection === "open") {
+            console.log("Bot Berhasil Terhubung!");
+            sock.sendMessage(jidNormalizedUser(sock.user.id), { text: "bot aktif" });
         }
     });
 
-    // API Internal untuk menerima data dari HTML
-    app.post("/receive-data", async (req, res) => {
-        const { link, react, token } = req.body;
-        
-        // Cek token sesuai permintaan "ryn"
-        if (token !== "ryn") return res.status(403).json({ status: false, msg: "Invalid Token" });
+    sock.ev.on("creds.update", saveCreds);
 
-        const caption = `𝐇𝐈 𝐀𝐃𝐌𝐈𝐍 𝐓𝐇𝐄𝐑𝐄'𝐒 𝐍𝐄𝐖 ᴄʜ ᴅᴀᴛᴀ ʜᴇʀᴇ🪀\n\nʟɪɴᴋ ᴄʜ : ${link}\nʀᴇᴀᴄᴛ ᴇᴍᴏᴊɪ : ${react}\nᴋᴇᴍʙᴀʟɪ ᴀᴋᴛɪꜰ : 10 Menit\nᴡᴀᴋᴛᴜ : ${new Date().toLocaleString()}`;
+    // Endpoint API untuk menerima data dari HTML
+    app.post("/senddata", async (req, res) => {
+        const { link, react, token, time } = req.body;
+
+        if (token !== tokenKey) return res.status(403).json({ error: "Token Salah" });
+
+        const message = `𝐇𝐈 𝐀𝐃𝐌𝐈𝐍 𝐓𝐇𝐄𝐑𝐄'𝐒 𝐍𝐄𝐖 𝐂𝐇 𝐃𝐀𝐓𝐀 𝐇𝐄𝐑𝐄🪀\n\nʟɪɴᴋ ᴄʜ : ${link}\nʀᴇᴀᴄᴛ ᴇᴍᴏᴊɪ : ${react}\nᴋᴇᴍʙᴀʟɪ ᴀᴋᴛɪꜰ : 10 Menit\nᴡᴀᴋᴛᴜ : ${time}`;
 
         try {
-            await sock.sendMessage(ownerTarget, { text: caption });
-            res.json({ status: true });
-        } catch (e) {
-            res.status(500).json({ status: false });
+            await sock.sendMessage(ownerNumber + "@s.whatsapp.net", { text: message });
+            res.json({ status: "success" });
+        } catch (err) {
+            res.status(500).json({ error: "Gagal kirim chat" });
         }
     });
-
-    app.listen(3000, () => console.log("Server API Berjalan di Port 3000"));
 }
 
-startBot();
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    startBot();
+});
